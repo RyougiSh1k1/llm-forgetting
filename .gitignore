@@ -71,6 +71,4 @@ datasets/
 tmp/
 temp/
 *.tmp
-CLAUDE.md
-EEFICIENT_LANDSCAPE_ANALYSIS.md
-TRACE_INSPIRED_SETUP.md
+docs/
