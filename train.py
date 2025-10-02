@@ -101,7 +101,7 @@ def train_on_task(
         logging_steps=training_config["logging_steps"],
         save_steps=training_config["save_steps"],
         eval_steps=training_config["eval_steps"],
-        evaluation_strategy="steps",
+        eval_strategy="steps",
         save_strategy="steps",
         fp16=training_config["fp16"],
         report_to="none",

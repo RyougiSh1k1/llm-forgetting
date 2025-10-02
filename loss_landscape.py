@@ -8,13 +8,14 @@ import os
 from tqdm import tqdm
 
 
-def generate_random_direction(model, seed: int = 42):
+def generate_random_direction(model, seed: int = 42, device: str = 'cuda'):
     """
     Generate a random direction in parameter space with same dimension as model parameters.
 
     Args:
         model: Model
         seed: Random seed
+        device: Device to place tensors on
 
     Returns:
         Random direction tensor (normalized)
@@ -25,7 +26,7 @@ def generate_random_direction(model, seed: int = 42):
     for param in model.parameters():
         if param.requires_grad:
             random_dir = torch.randn_like(param.data)
-            direction.append(random_dir.view(-1))
+            direction.append(random_dir.view(-1).to(device))
 
     direction = torch.cat(direction)
     # Normalize direction
@@ -271,12 +272,12 @@ def analyze_loss_landscape(
     params = []
     for param in model.parameters():
         if param.requires_grad:
-            params.append(param.data.view(-1))
+            params.append(param.data.view(-1).to(device))
     center_params = torch.cat(params)
 
     # Generate random directions
-    dir1 = generate_random_direction(model, seed=seed)
-    dir2 = generate_random_direction(model, seed=seed + 1)
+    dir1 = generate_random_direction(model, seed=seed, device=device)
+    dir2 = generate_random_direction(model, seed=seed + 1, device=device)
 
     # Ensure directions are orthogonal
     dir2 = dir2 - (torch.dot(dir1, dir2) / torch.dot(dir1, dir1)) * dir1
