@@ -167,33 +167,41 @@ def compare_landscapes(
         name2: Name of second landscape
     """
     print("\n" + "=" * 60)
-    print("LOSS LANDSCAPE COMPARISON")
+    print("LOSS LANDSCAPE COMPARISON (Efficient Metrics)")
     print("=" * 60)
 
+    # Filter out list values (eigenvalues) for comparison
+    scalar_metrics1 = {k: v for k, v in landscape1_metrics.items() if not isinstance(v, list) and v is not None}
+    scalar_metrics2 = {k: v for k, v in landscape2_metrics.items() if not isinstance(v, list) and v is not None}
+
     print(f"\n{name1}:")
-    for key, value in landscape1_metrics.items():
+    for key, value in scalar_metrics1.items():
         print(f"  {key}: {value:.6f}")
 
     print(f"\n{name2}:")
-    for key, value in landscape2_metrics.items():
+    for key, value in scalar_metrics2.items():
         print(f"  {key}: {value:.6f}")
 
     print("\nChanges (Task 2 - Task 1):")
-    for key in landscape1_metrics:
-        change = landscape2_metrics[key] - landscape1_metrics[key]
-        pct_change = (change / landscape1_metrics[key] * 100) if landscape1_metrics[key] != 0 else 0
-        print(f"  Δ{key}: {change:+.6f} ({pct_change:+.2f}%)")
+    for key in scalar_metrics1:
+        if key in scalar_metrics2:
+            change = scalar_metrics2[key] - scalar_metrics1[key]
+            pct_change = (change / scalar_metrics1[key] * 100) if scalar_metrics1[key] != 0 else 0
+            print(f"  Δ{key}: {change:+.6f} ({pct_change:+.2f}%)")
 
-    # Interpret flatness
-    print("\nFlatness Analysis:")
-    if landscape2_metrics["std_loss"] < landscape1_metrics["std_loss"]:
-        print("  → Loss landscape became FLATTER after Task 2 training")
-    else:
-        print("  → Loss landscape became SHARPER after Task 2 training")
+    # Interpret flatness based on lambda_max
+    print("\nSharpness Analysis (based on Mirzadeh et al. 2020):")
+    if "lambda_max" in scalar_metrics1 and "lambda_max" in scalar_metrics2:
+        if scalar_metrics2["lambda_max"] < scalar_metrics1["lambda_max"]:
+            print("  → Loss landscape became FLATTER after Task 2 training (λ_max decreased)")
+            print("     This suggests REDUCED forgetting (wider minima)")
+        else:
+            print("  → Loss landscape became SHARPER after Task 2 training (λ_max increased)")
+            print("     This suggests INCREASED forgetting (sharper minima)")
 
-    if landscape2_metrics["max_curvature"] < landscape1_metrics["max_curvature"]:
-        print("  → Maximum curvature DECREASED (flatter)")
-    else:
-        print("  → Maximum curvature INCREASED (sharper)")
+    if "displacement" in scalar_metrics2 and scalar_metrics2["displacement"] is not None:
+        print(f"\nParameter Displacement:")
+        print(f"  ||Δw|| = {scalar_metrics2['displacement']:.2f}")
+        print(f"  Bound on forgetting: F₁ ≤ (1/2) λ_max ||Δw||² = {0.5 * scalar_metrics2.get('lambda_max', 0) * scalar_metrics2['displacement']**2:.4f}")
 
     print("=" * 60 + "\n")

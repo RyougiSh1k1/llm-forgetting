@@ -8,7 +8,7 @@ from datetime import datetime
 from config import ModelConfig, LoRAConfig, TrainingConfig, MMLUConfig, LossLandscapeConfig
 from data_loader import create_dataloaders, MMLUDataset
 from train import setup_model_and_tokenizer, train_on_task, save_checkpoint, load_checkpoint
-from loss_landscape import analyze_loss_landscape
+from loss_landscape import analyze_loss_landscape, analyze_loss_landscape_efficient, get_model_parameters
 from evaluate import (
     evaluate_both_tasks,
     compute_forgetting_metrics,
@@ -104,9 +104,15 @@ def main(args):
         mmlu_config.task1
     )
 
+    # Save initial parameters (for displacement tracking)
+    initial_params = get_model_parameters(model, device)
+
     # Save checkpoint after Task 1
     checkpoint1_path = os.path.join(output_dir, "checkpoint_after_task1")
     save_checkpoint(model, tokenizer, checkpoint1_path)
+
+    # Get parameters after Task 1
+    params_after_task1 = get_model_parameters(model, device)
 
     # ========== PHASE 3: Evaluate after Task 1 ==========
     print("\n" + "="*70)
@@ -118,25 +124,23 @@ def main(args):
         mmlu_config.task1, mmlu_config.task2
     )
 
-    # ========== PHASE 4: Analyze Loss Landscape after Task 1 ==========
+    # ========== PHASE 4: Analyze Loss Landscape after Task 1 (EFFICIENT) ==========
     print("\n" + "="*70)
-    print("PHASE 4: Loss Landscape Analysis after Task 1")
+    print("PHASE 4: Loss Landscape Analysis after Task 1 (Efficient)")
     print("="*70 + "\n")
 
-    landscape1_task1 = analyze_loss_landscape(
+    landscape1_task1 = analyze_loss_landscape_efficient(
         model, task1_test_loader, device,
         output_dir, f"task1_{mmlu_config.task1}",
-        distance=landscape_config.distance,
-        num_points=landscape_config.num_points,
-        seed=landscape_config.random_seed
+        initial_params=initial_params,
+        num_eigenvalues=20
     )
 
-    landscape1_task2 = analyze_loss_landscape(
+    landscape1_task2 = analyze_loss_landscape_efficient(
         model, task2_test_loader, device,
         output_dir, f"task1_on_{mmlu_config.task2}",
-        distance=landscape_config.distance,
-        num_points=landscape_config.num_points,
-        seed=landscape_config.random_seed
+        initial_params=initial_params,
+        num_eigenvalues=20
     )
 
     # ========== PHASE 5: Train on Task 2 ==========
@@ -159,6 +163,9 @@ def main(args):
     checkpoint2_path = os.path.join(output_dir, "checkpoint_after_task2")
     save_checkpoint(model, tokenizer, checkpoint2_path)
 
+    # Get parameters after Task 2
+    params_after_task2 = get_model_parameters(model, device)
+
     # ========== PHASE 6: Evaluate after Task 2 ==========
     print("\n" + "="*70)
     print("PHASE 6: Evaluation after Task 2")
@@ -169,25 +176,23 @@ def main(args):
         mmlu_config.task1, mmlu_config.task2
     )
 
-    # ========== PHASE 7: Analyze Loss Landscape after Task 2 ==========
+    # ========== PHASE 7: Analyze Loss Landscape after Task 2 (EFFICIENT) ==========
     print("\n" + "="*70)
-    print("PHASE 7: Loss Landscape Analysis after Task 2")
+    print("PHASE 7: Loss Landscape Analysis after Task 2 (Efficient)")
     print("="*70 + "\n")
 
-    landscape2_task1 = analyze_loss_landscape(
+    landscape2_task1 = analyze_loss_landscape_efficient(
         model, task1_test_loader, device,
         output_dir, f"task2_on_{mmlu_config.task1}",
-        distance=landscape_config.distance,
-        num_points=landscape_config.num_points,
-        seed=landscape_config.random_seed
+        initial_params=params_after_task1,
+        num_eigenvalues=20
     )
 
-    landscape2_task2 = analyze_loss_landscape(
+    landscape2_task2 = analyze_loss_landscape_efficient(
         model, task2_test_loader, device,
         output_dir, f"task2_{mmlu_config.task2}",
-        distance=landscape_config.distance,
-        num_points=landscape_config.num_points,
-        seed=landscape_config.random_seed
+        initial_params=params_after_task1,
+        num_eigenvalues=20
     )
 
     # ========== PHASE 8: Compute Forgetting Metrics ==========
