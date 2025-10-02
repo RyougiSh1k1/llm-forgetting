@@ -260,8 +260,8 @@ def main(args):
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="LLM Catastrophic Forgetting Experiment")
-    parser.add_argument("--task1", type=str, default="abstract_algebra", help="First MMLU task")
-    parser.add_argument("--task2", type=str, default="anatomy", help="Second MMLU task")
+    parser.add_argument("--task1", type=str, default="college_mathematics", help="First MMLU task")
+    parser.add_argument("--task2", type=str, default="high_school_us_history", help="Second MMLU task")
     parser.add_argument("--batch_size", type=int, default=16, help="Batch size")
     parser.add_argument("--num_epochs", type=int, default=3, help="Number of epochs per task")
 

@@ -1,6 +1,8 @@
 """MMLU dataset loader for catastrophic forgetting experiments."""
 
 import torch
+import os
+import shutil
 from datasets import load_dataset
 from torch.utils.data import Dataset
 from typing import Dict, List
@@ -22,6 +24,15 @@ class MMLUDataset(Dataset):
         self.task_name = task_name
         self.tokenizer = tokenizer
         self.max_length = max_length
+
+        # Clear corrupted cache if it exists
+        cache_dir = os.path.expanduser("~/.cache/huggingface/datasets/cais___mmlu")
+        if os.path.exists(cache_dir):
+            try:
+                shutil.rmtree(cache_dir)
+                print(f"Cleared corrupted MMLU cache at {cache_dir}")
+            except Exception as e:
+                print(f"Warning: Could not clear cache: {e}")
 
         # Load MMLU dataset
         self.dataset = load_dataset("cais/mmlu", task_name, split=split)

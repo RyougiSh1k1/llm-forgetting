@@ -57,7 +57,7 @@ class MMLUConfig:
     """
     # OPTION 1: Math/Logic → Social Science/Memorization (RECOMMENDED)
     task1: str = "college_mathematics"  # Quantitative reasoning
-    task2: str = "us_history"  # Historical facts/memorization
+    task2: str = "high_school_us_history"  # Historical facts/memorization (FIXED: was "us_history")
 
     # OPTION 2: Hard Science → Soft Humanities
     # task1: str = "high_school_physics"  # Physics concepts
