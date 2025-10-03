@@ -42,7 +42,7 @@ env/
 *.ipynb
 
 # Model outputs and checkpoints
-outputs/
+
 checkpoints/
 *.pth
 *.pt
@@ -63,7 +63,6 @@ data/
 datasets/
 *.csv
 *.tsv
-*.json
 !requirements.txt
 !config.py
 

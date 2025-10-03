@@ -1,0 +1,136 @@
+{
+  "config": {
+    "model": "meta-llama/Llama-2-7b-hf",
+    "task1": "college_mathematics",
+    "task2": "high_school_us_history",
+    "batch_size": 8,
+    "num_epochs": 3,
+    "lora_r": 32,
+    "lora_alpha": 64
+  },
+  "accuracy_after_task1": {
+    "college_mathematics_accuracy": 0.23,
+    "high_school_us_history_accuracy": 0.47058823529411764
+  },
+  "accuracy_after_task2": {
+    "college_mathematics_accuracy": 0.23,
+    "high_school_us_history_accuracy": 0.4852941176470588
+  },
+  "forgetting_metrics": {
+    "task1_acc_before": 0.23,
+    "task1_acc_after": 0.23,
+    "task2_acc_after": 0.4852941176470588,
+    "absolute_forgetting": 0.0,
+    "relative_forgetting_pct": 0.0,
+    "backward_transfer": 0.0,
+    "avg_accuracy": 0.35764705882352943
+  },
+  "landscape_task1_after_task1": {
+    "lambda_max": 0.0,
+    "eigenvalues": [
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0
+    ],
+    "param_norm": 48.8861083984375,
+    "displacement": 0.0
+  },
+  "landscape_task1_after_task2": {
+    "lambda_max": 0.0,
+    "eigenvalues": [
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0
+    ],
+    "param_norm": 48.888221740722656,
+    "displacement": 0.13279707729816437
+  },
+  "landscape_task2_after_task1": {
+    "lambda_max": 0.0,
+    "eigenvalues": [
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0
+    ],
+    "param_norm": 48.8861083984375,
+    "displacement": 0.0
+  },
+  "landscape_task2_after_task2": {
+    "lambda_max": 0.0,
+    "eigenvalues": [
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0
+    ],
+    "param_norm": 48.888221740722656,
+    "displacement": 0.13279707729816437
+  }
+}
