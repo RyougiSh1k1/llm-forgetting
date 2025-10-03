@@ -12,8 +12,8 @@ class ModelConfig:
 @dataclass
 class LoRAConfig:
     """LoRA configuration for Sequential Fine-Tuning (LoRA-SEFT)."""
-    r: int = 64  # Increased from 16 for more capacity
-    lora_alpha: int = 128  # Increased from 32 (typically 2*r)
+    r: int = 32  # Increased from 16 for more capacity
+    lora_alpha: int = 64  # Increased from 32 (typically 2*r)
     target_modules: List[str] = None
     lora_dropout: float = 0.1  # Increased from 0.05 for regularization
     bias: str = "none"
@@ -30,8 +30,8 @@ class LoRAConfig:
 @dataclass
 class TrainingConfig:
     """Training configuration for continual learning."""
-    batch_size: int = 8  # Smaller batch for more frequent updates
-    gradient_accumulation_steps: int = 2  # Effective batch = 16
+    batch_size: int = 1  # Reduced to avoid OOM
+    gradient_accumulation_steps: int = 16  # Effective batch = 16
     num_epochs: int = 10  # Increased from 3 for better learning
     learning_rate: float = 3e-4  # Slightly higher for faster adaptation
     weight_decay: float = 0.01
@@ -42,36 +42,32 @@ class TrainingConfig:
     output_dir: str = "./outputs"
     fp16: bool = True
     max_grad_norm: float = 1.0  # Gradient clipping
+    gradient_checkpointing: bool = True  # Enable to save memory
 
 @dataclass
-class MMLUConfig:
-    """MMLU dataset configuration.
+class TRACEConfig:
+    """TRACE benchmark dataset configuration.
 
-    Following TRACE principles: use maximally different domains
+    Following TRACE benchmark: use maximally different domains
     to induce catastrophic forgetting.
 
-    TRACE-style task selection:
-    - Different knowledge domains (STEM vs Humanities)
-    - Different cognitive processes (reasoning vs memorization)
-    - Minimal semantic overlap
+    TRACE uses 8 tasks total, we implement the first 2:
+    - Task 1: ScienceQA (Domain-specific - Science)
+    - Task 2: FOMC (Domain-specific - Finance)
+
+    Each task uses:
+    - 5000 training samples
+    - 2000 test samples
     """
-    # OPTION 1: Math/Logic → Social Science/Memorization (RECOMMENDED)
-    task1: str = "college_mathematics"  # Quantitative reasoning
-    task2: str = "high_school_us_history"  # Historical facts/memorization (FIXED: was "us_history")
-
-    # OPTION 2: Hard Science → Soft Humanities
-    # task1: str = "high_school_physics"  # Physics concepts
-    # task2: str = "moral_scenarios"  # Ethics/judgment
-
-    # OPTION 3: Technical → Cultural
-    # task1: str = "high_school_computer_science"  # Technical
-    # task2: str = "world_religions"  # Cultural knowledge
-
-    # OPTION 4: Formal Logic → Subjective Interpretation
-    # task1: str = "formal_logic"  # Deductive reasoning
-    # task2: str = "philosophy"  # Subjective reasoning
+    # TRACE benchmark tasks (first two)
+    task1: str = "scienceqa"  # Science domain - multi-hop QA
+    task2: str = "fomc"  # Finance domain - sentiment classification
 
     num_shots: int = 0  # 0 for fine-tuning
+
+    # TRACE dataset sizes per task (reduced for faster training/testing)
+    train_samples: int = 500  # Reduced from 5000
+    test_samples: int = 200   # Reduced from 2000
 
 @dataclass
 class LossLandscapeConfig:

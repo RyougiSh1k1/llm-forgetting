@@ -5,8 +5,8 @@ import os
 import argparse
 from datetime import datetime
 
-from config import ModelConfig, LoRAConfig, TrainingConfig, MMLUConfig, LossLandscapeConfig
-from data_loader import create_dataloaders, MMLUDataset
+from config import ModelConfig, LoRAConfig, TrainingConfig, TRACEConfig, LossLandscapeConfig
+from data_loader import TRACEDataset
 from train import setup_model_and_tokenizer, train_on_task, save_checkpoint, load_checkpoint
 from loss_landscape import analyze_loss_landscape, analyze_loss_landscape_efficient, get_model_parameters
 from evaluate import (
@@ -27,9 +27,9 @@ def main(args):
     training_config = TrainingConfig()
     training_config.batch_size = args.batch_size
     training_config.num_epochs = args.num_epochs
-    mmlu_config = MMLUConfig()
-    mmlu_config.task1 = args.task1
-    mmlu_config.task2 = args.task2
+    trace_config = TRACEConfig()
+    trace_config.task1 = args.task1
+    trace_config.task2 = args.task2
     landscape_config = LossLandscapeConfig()
 
     # Create output directory
@@ -38,12 +38,12 @@ def main(args):
     os.makedirs(output_dir, exist_ok=True)
 
     print(f"\n{'='*70}")
-    print(f"EXPERIMENT: Loss Landscape Flatness & Catastrophic Forgetting")
+    print(f"TRACE BENCHMARK: Loss Landscape Flatness & Catastrophic Forgetting")
     print(f"{'='*70}")
     print(f"\nConfiguration:")
     print(f"  Model: {model_config.model_name}")
-    print(f"  Task 1: {mmlu_config.task1}")
-    print(f"  Task 2: {mmlu_config.task2}")
+    print(f"  Task 1: {trace_config.task1}")
+    print(f"  Task 2: {trace_config.task2}")
     print(f"  Batch Size: {training_config.batch_size}")
     print(f"  Epochs per task: {training_config.num_epochs}")
     print(f"  LoRA r: {lora_config.r}, alpha: {lora_config.lora_alpha}")
@@ -64,18 +64,22 @@ def main(args):
         lora_config.__dict__
     )
 
-    # Create dataloaders
-    task1_train_dataset = MMLUDataset(
-        mmlu_config.task1, split="dev", tokenizer=tokenizer, max_length=model_config.max_length
+    # Create TRACE datasets with configured sample sizes
+    task1_train_dataset = TRACEDataset(
+        trace_config.task1, split="train", tokenizer=tokenizer, max_length=model_config.max_length,
+        train_samples=trace_config.train_samples, test_samples=trace_config.test_samples
     )
-    task1_test_dataset = MMLUDataset(
-        mmlu_config.task1, split="test", tokenizer=tokenizer, max_length=model_config.max_length
+    task1_test_dataset = TRACEDataset(
+        trace_config.task1, split="test", tokenizer=tokenizer, max_length=model_config.max_length,
+        train_samples=trace_config.train_samples, test_samples=trace_config.test_samples
     )
-    task2_train_dataset = MMLUDataset(
-        mmlu_config.task2, split="dev", tokenizer=tokenizer, max_length=model_config.max_length
+    task2_train_dataset = TRACEDataset(
+        trace_config.task2, split="train", tokenizer=tokenizer, max_length=model_config.max_length,
+        train_samples=trace_config.train_samples, test_samples=trace_config.test_samples
     )
-    task2_test_dataset = MMLUDataset(
-        mmlu_config.task2, split="test", tokenizer=tokenizer, max_length=model_config.max_length
+    task2_test_dataset = TRACEDataset(
+        trace_config.task2, split="test", tokenizer=tokenizer, max_length=model_config.max_length,
+        train_samples=trace_config.train_samples, test_samples=trace_config.test_samples
     )
 
     from torch.utils.data import DataLoader
@@ -85,8 +89,8 @@ def main(args):
     task2_test_loader = DataLoader(task2_test_dataset, batch_size=training_config.batch_size, shuffle=False)
 
     print(f"Dataset sizes:")
-    print(f"  Task 1 ({mmlu_config.task1}): {len(task1_train_dataset)} train, {len(task1_test_dataset)} test")
-    print(f"  Task 2 ({mmlu_config.task2}): {len(task2_train_dataset)} train, {len(task2_test_dataset)} test")
+    print(f"  Task 1 ({trace_config.task1}): {len(task1_train_dataset)} train, {len(task1_test_dataset)} test")
+    print(f"  Task 2 ({trace_config.task2}): {len(task2_train_dataset)} train, {len(task2_test_dataset)} test")
 
     # ========== PHASE 2: Train on Task 1 ==========
     print("\n" + "="*70)
@@ -101,7 +105,7 @@ def main(args):
         task1_test_dataset,
         task1_output_dir,
         training_config.__dict__,
-        mmlu_config.task1
+        trace_config.task1
     )
 
     # Save initial parameters (for displacement tracking)
@@ -121,7 +125,7 @@ def main(args):
 
     results_after_task1 = evaluate_both_tasks(
         model, task1_test_loader, task2_test_loader, device,
-        mmlu_config.task1, mmlu_config.task2
+        trace_config.task1, trace_config.task2
     )
 
     # ========== PHASE 4: Analyze Loss Landscape after Task 1 (EFFICIENT) ==========
@@ -131,14 +135,14 @@ def main(args):
 
     landscape1_task1 = analyze_loss_landscape_efficient(
         model, task1_test_loader, device,
-        output_dir, f"task1_{mmlu_config.task1}",
+        output_dir, f"task1_{trace_config.task1}",
         initial_params=initial_params,
         num_eigenvalues=20
     )
 
     landscape1_task2 = analyze_loss_landscape_efficient(
         model, task2_test_loader, device,
-        output_dir, f"task1_on_{mmlu_config.task2}",
+        output_dir, f"task1_on_{trace_config.task2}",
         initial_params=initial_params,
         num_eigenvalues=20
     )
@@ -156,7 +160,7 @@ def main(args):
         task2_test_dataset,
         task2_output_dir,
         training_config.__dict__,
-        mmlu_config.task2
+        trace_config.task2
     )
 
     # Save checkpoint after Task 2
@@ -173,7 +177,7 @@ def main(args):
 
     results_after_task2 = evaluate_both_tasks(
         model, task1_test_loader, task2_test_loader, device,
-        mmlu_config.task1, mmlu_config.task2
+        trace_config.task1, trace_config.task2
     )
 
     # ========== PHASE 7: Analyze Loss Landscape after Task 2 (EFFICIENT) ==========
@@ -183,14 +187,14 @@ def main(args):
 
     landscape2_task1 = analyze_loss_landscape_efficient(
         model, task1_test_loader, device,
-        output_dir, f"task2_on_{mmlu_config.task1}",
+        output_dir, f"task2_on_{trace_config.task1}",
         initial_params=params_after_task1,
         num_eigenvalues=20
     )
 
     landscape2_task2 = analyze_loss_landscape_efficient(
         model, task2_test_loader, device,
-        output_dir, f"task2_{mmlu_config.task2}",
+        output_dir, f"task2_{trace_config.task2}",
         initial_params=params_after_task1,
         num_eigenvalues=20
     )
@@ -201,9 +205,9 @@ def main(args):
     print("="*70 + "\n")
 
     forgetting_metrics = compute_forgetting_metrics(
-        results_after_task1[f"{mmlu_config.task1}_accuracy"],
-        results_after_task2[f"{mmlu_config.task1}_accuracy"],
-        results_after_task2[f"{mmlu_config.task2}_accuracy"]
+        results_after_task1[f"{trace_config.task1}_accuracy"],
+        results_after_task2[f"{trace_config.task1}_accuracy"],
+        results_after_task2[f"{trace_config.task2}_accuracy"]
     )
 
     print_forgetting_report(forgetting_metrics)
@@ -213,7 +217,7 @@ def main(args):
     print("PHASE 9: Loss Landscape Comparison")
     print("="*70 + "\n")
 
-    print(f"\nFor Task 1 ({mmlu_config.task1}) data:")
+    print(f"\nFor Task 1 ({trace_config.task1}) data:")
     compare_landscapes(
         landscape1_task1["metrics"],
         landscape2_task1["metrics"],
@@ -229,8 +233,8 @@ def main(args):
     final_results = {
         "config": {
             "model": model_config.model_name,
-            "task1": mmlu_config.task1,
-            "task2": mmlu_config.task2,
+            "task1": trace_config.task1,
+            "task2": trace_config.task2,
             "batch_size": training_config.batch_size,
             "num_epochs": training_config.num_epochs,
             "lora_r": lora_config.r,
@@ -259,11 +263,11 @@ def main(args):
 
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="LLM Catastrophic Forgetting Experiment")
-    parser.add_argument("--task1", type=str, default="college_mathematics", help="First MMLU task")
-    parser.add_argument("--task2", type=str, default="high_school_us_history", help="Second MMLU task")
-    parser.add_argument("--batch_size", type=int, default=16, help="Batch size")
-    parser.add_argument("--num_epochs", type=int, default=3, help="Number of epochs per task")
+    parser = argparse.ArgumentParser(description="TRACE Benchmark - Catastrophic Forgetting Experiment")
+    parser.add_argument("--task1", type=str, default="scienceqa", help="First TRACE task")
+    parser.add_argument("--task2", type=str, default="fomc", help="Second TRACE task")
+    parser.add_argument("--batch_size", type=int, default=1, help="Batch size")
+    parser.add_argument("--num_epochs", type=int, default=10, help="Number of epochs per task")
 
     args = parser.parse_args()
     main(args)

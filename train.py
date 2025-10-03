@@ -45,6 +45,9 @@ def setup_model_and_tokenizer(model_name: str, lora_config: dict):
         trust_remote_code=True
     )
 
+    # Enable gradient checkpointing before LoRA
+    model.gradient_checkpointing_enable()
+
     # Prepare model for training
     model = prepare_model_for_kbit_training(model)
 

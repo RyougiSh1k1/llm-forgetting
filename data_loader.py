@@ -1,65 +1,118 @@
-"""MMLU dataset loader for catastrophic forgetting experiments."""
+"""TRACE dataset loader for catastrophic forgetting experiments."""
 
 import torch
-import os
-import shutil
 from datasets import load_dataset
 from torch.utils.data import Dataset
 from typing import Dict, List
 
 
-class MMLUDataset(Dataset):
-    """MMLU dataset wrapper for specific tasks."""
+class TRACEDataset(Dataset):
+    """TRACE dataset wrapper supporting multiple task types."""
 
-    def __init__(self, task_name: str, split: str = "test", tokenizer=None, max_length: int = 512):
+    def __init__(self, task_name: str, split: str = "train", tokenizer=None, max_length: int = 512,
+                 train_samples: int = 500, test_samples: int = 200):
         """
-        Initialize MMLU dataset for a specific task.
+        Initialize TRACE dataset for a specific task.
 
         Args:
-            task_name: MMLU task name (e.g., 'abstract_algebra', 'anatomy')
-            split: Dataset split ('test', 'dev', 'validation')
+            task_name: Task name ('scienceqa', 'fomc', etc.)
+            split: Dataset split ('train', 'test', 'validation')
             tokenizer: Tokenizer for encoding
             max_length: Maximum sequence length
+            train_samples: Number of training samples to use
+            test_samples: Number of test samples to use
         """
-        self.task_name = task_name
+        self.task_name = task_name.lower()
         self.tokenizer = tokenizer
         self.max_length = max_length
+        self.split = split
+        self.train_samples = train_samples
+        self.test_samples = test_samples
 
-        # Clear corrupted cache if it exists
-        cache_dir = os.path.expanduser("~/.cache/huggingface/datasets/cais___mmlu")
-        if os.path.exists(cache_dir):
-            try:
-                shutil.rmtree(cache_dir)
-                print(f"Cleared corrupted MMLU cache at {cache_dir}")
-            except Exception as e:
-                print(f"Warning: Could not clear cache: {e}")
+        # Load dataset based on task name
+        if self.task_name == "scienceqa":
+            # ScienceQA dataset - only text-based questions (no images)
+            full_dataset = load_dataset("derek-thomas/ScienceQA", split="train")
+            # Filter out image-based questions
+            filtered_dataset = full_dataset.filter(lambda x: x['image'] is None)
 
-        # Load MMLU dataset
-        self.dataset = load_dataset("cais/mmlu", task_name, split=split)
+            # Split into train/test using configured sample sizes
+            total_available = len(filtered_dataset)
+            train_size = min(train_samples, int(total_available * 0.8))
 
-        # Answer choices
-        self.choices = ["A", "B", "C", "D"]
+            if split == "train":
+                self.dataset = filtered_dataset.select(range(train_size))
+            else:  # test
+                test_start = int(total_available * 0.8)
+                test_end = min(total_available, test_start + test_samples)
+                self.dataset = filtered_dataset.select(range(test_start, test_end))
+
+        elif self.task_name == "fomc":
+            # FOMC dataset for hawkish/dovish classification
+            full_dataset = load_dataset("gtfintechlab/fomc_communication", split="train")
+
+            # Split into train/test using configured sample sizes
+            total_available = len(full_dataset)
+            train_size = min(train_samples, int(total_available * 0.8))
+
+            if split == "train":
+                self.dataset = full_dataset.select(range(train_size))
+            else:  # test
+                test_start = int(total_available * 0.8)
+                test_end = min(total_available, test_start + test_samples)
+                self.dataset = full_dataset.select(range(test_start, test_end))
+        else:
+            raise ValueError(f"Unknown task: {task_name}")
 
     def __len__(self) -> int:
         return len(self.dataset)
 
-    def format_question(self, item: Dict) -> str:
-        """Format MMLU question as prompt."""
+    def format_scienceqa(self, item: Dict) -> tuple:
+        """Format ScienceQA question as prompt."""
         question = item["question"]
-        choices = "\n".join([
-            f"{self.choices[i]}: {item['choices'][i]}"
-            for i in range(len(item['choices']))
+        choices = item["choices"]
+
+        # Format choices as A, B, C, D...
+        choice_labels = ["A", "B", "C", "D", "E", "F"][:len(choices)]
+        formatted_choices = "\n".join([
+            f"{label}: {choice}" for label, choice in zip(choice_labels, choices)
         ])
-        prompt = f"Question: {question}\n{choices}\nAnswer:"
-        return prompt
+
+        # TRACE prompt: "Choose an answer for the following question and give your reasons."
+        prompt = f"Choose an answer for the following question and give your reasons.\nQuestion: {question}\n{formatted_choices}\nAnswer:"
+
+        # Get answer
+        answer_idx = item["answer"]
+        answer = choice_labels[answer_idx]
+
+        return prompt, answer
+
+    def format_fomc(self, item: Dict) -> tuple:
+        """Format FOMC text as prompt."""
+        text = item["sentence"]
+
+        # TRACE prompt from Table 32
+        prompt = "What is the monetary policy stance for the following text? A. dovish, B. hawkish, C. neutral. Choose one from A, B and C.\n"
+        prompt += f"Text: {text}\nAnswer:"
+
+        # Map label to A/B/C (0=dovish, 1=hawkish, 2=neutral)
+        label = item["label"]
+        label_map = {0: "A", 1: "B", 2: "C"}
+        answer = label_map[label]
+
+        return prompt, answer
 
     def __getitem__(self, idx: int) -> Dict:
         """Get dataset item."""
         item = self.dataset[idx]
 
-        # Format prompt
-        prompt = self.format_question(item)
-        answer = self.choices[item["answer"]]
+        # Format based on task type
+        if self.task_name == "scienceqa":
+            prompt, answer = self.format_scienceqa(item)
+        elif self.task_name == "fomc":
+            prompt, answer = self.format_fomc(item)
+        else:
+            raise ValueError(f"Unknown task: {self.task_name}")
 
         # Full text for training
         full_text = f"{prompt} {answer}"
@@ -97,49 +150,9 @@ class MMLUDataset(Dataset):
             }
 
 
-def create_dataloaders(task1: str, task2: str, tokenizer, batch_size: int = 16,
-                       max_length: int = 512, split: str = "test"):
-    """
-    Create dataloaders for two MMLU tasks.
-
-    Args:
-        task1: First MMLU task name
-        task2: Second MMLU task name
-        tokenizer: Tokenizer for encoding
-        batch_size: Batch size
-        max_length: Maximum sequence length
-        split: Dataset split
-
-    Returns:
-        Tuple of (task1_loader, task2_loader)
-    """
-    from torch.utils.data import DataLoader
-
-    # Create datasets
-    dataset1 = MMLUDataset(task1, split=split, tokenizer=tokenizer, max_length=max_length)
-    dataset2 = MMLUDataset(task2, split=split, tokenizer=tokenizer, max_length=max_length)
-
-    # Create dataloaders
-    loader1 = DataLoader(
-        dataset1,
-        batch_size=batch_size,
-        shuffle=True,
-        num_workers=0
-    )
-
-    loader2 = DataLoader(
-        dataset2,
-        batch_size=batch_size,
-        shuffle=True,
-        num_workers=0
-    )
-
-    return loader1, loader2
-
-
 def evaluate_accuracy(model, dataloader, device) -> float:
     """
-    Evaluate model accuracy on MMLU task.
+    Evaluate model accuracy on TRACE task.
 
     Args:
         model: Model to evaluate
@@ -152,8 +165,6 @@ def evaluate_accuracy(model, dataloader, device) -> float:
     model.eval()
     correct = 0
     total = 0
-
-    choices = ["A", "B", "C", "D"]
 
     with torch.no_grad():
         for batch in dataloader:
@@ -185,8 +196,8 @@ def evaluate_accuracy(model, dataloader, device) -> float:
                     skip_special_tokens=True
                 ).strip()
 
-                # Check if prediction matches
-                if generated and generated[0] == answer:
+                # Check if prediction matches (first character should be the answer)
+                if generated and generated[0].upper() == answer.upper():
                     correct += 1
                 total += 1
 
