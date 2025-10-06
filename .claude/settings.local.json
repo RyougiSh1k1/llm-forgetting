@@ -3,7 +3,8 @@
     "allow": [
       "Bash(python:*)",
       "Bash(conda install:*)",
-      "Bash(python3:*)"
+      "Bash(python3:*)",
+      "Bash(cat:*)"
     ],
     "deny": [],
     "ask": []

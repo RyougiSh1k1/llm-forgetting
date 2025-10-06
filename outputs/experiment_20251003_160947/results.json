@@ -1,0 +1,136 @@
+{
+  "config": {
+    "model": "meta-llama/Llama-2-7b-hf",
+    "task1": "scienceqa",
+    "task2": "fomc",
+    "batch_size": 1,
+    "num_epochs": 10,
+    "lora_r": 32,
+    "lora_alpha": 64
+  },
+  "accuracy_after_task1": {
+    "scienceqa_accuracy": 0.815,
+    "fomc_accuracy": 0.34
+  },
+  "accuracy_after_task2": {
+    "scienceqa_accuracy": 0.705,
+    "fomc_accuracy": 0.735
+  },
+  "forgetting_metrics": {
+    "task1_acc_before": 0.815,
+    "task1_acc_after": 0.705,
+    "task2_acc_after": 0.735,
+    "absolute_forgetting": 0.10999999999999999,
+    "relative_forgetting_pct": 13.496932515337424,
+    "backward_transfer": -0.10999999999999999,
+    "avg_accuracy": 0.72
+  },
+  "landscape_task1_after_task1": {
+    "lambda_max": 0.0,
+    "eigenvalues": [
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0
+    ],
+    "param_norm": 58.966426849365234,
+    "displacement": 0.0
+  },
+  "landscape_task1_after_task2": {
+    "lambda_max": 0.0,
+    "eigenvalues": [
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0
+    ],
+    "param_norm": 66.52490997314453,
+    "displacement": 28.999238967895508
+  },
+  "landscape_task2_after_task1": {
+    "lambda_max": 0.0,
+    "eigenvalues": [
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0
+    ],
+    "param_norm": 58.966426849365234,
+    "displacement": 0.0
+  },
+  "landscape_task2_after_task2": {
+    "lambda_max": 0.0,
+    "eigenvalues": [
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0
+    ],
+    "param_norm": 66.52490997314453,
+    "displacement": 28.999238967895508
+  }
+}

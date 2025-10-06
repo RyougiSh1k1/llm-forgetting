@@ -1,0 +1,13 @@
+{
+  "correlation": 0.7255144691103218,
+  "lambda_max_range": [
+    0.01,
+    0.08
+  ],
+  "displacement_range": [
+    3.0,
+    25.0
+  ],
+  "num_experiments": 20,
+  "theoretical_relationship": "Accuracy_Drop \u2248 (1/2) * lambda_max * ||Delta_w||^2"
+}

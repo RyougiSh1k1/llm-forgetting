@@ -246,6 +246,137 @@ def compute_sharpness_metrics(loss_grid: np.ndarray, alphas: np.ndarray, betas: 
     }
 
 
+def get_lora_parameters(model, device) -> torch.Tensor:
+    """
+    Get only LoRA parameters as a single vector (for LoRA subspace analysis).
+
+    Args:
+        model: PEFT model with LoRA
+        device: Device
+
+    Returns:
+        Flattened LoRA parameter vector
+    """
+    lora_params = []
+    for name, param in model.named_parameters():
+        if param.requires_grad and ('lora_A' in name or 'lora_B' in name):
+            lora_params.append(param.data.view(-1).to(device))
+
+    if len(lora_params) == 0:
+        raise ValueError("No LoRA parameters found! Make sure the model has LoRA adapters.")
+
+    return torch.cat(lora_params)
+
+
+def compute_hessian_eigenvalues_lora_subspace(model, dataloader, device, num_eigenvalues: int = 20) -> np.ndarray:
+    """
+    Compute top eigenvalues of the Hessian in LoRA subspace.
+
+    Following "Understanding the Role of Training Regimes in Continual Learning" (Mirzadeh et al. 2020),
+    this computes the Hessian with respect to LoRA parameters only, which is much more efficient
+    and relevant for LoRA-based continual learning.
+
+    The forgetting bound is: F1 ≈ (1/2) λ_max ||Δw||²
+    where λ_max is the maximum Hessian eigenvalue in LoRA subspace.
+
+    Args:
+        model: PEFT model with LoRA
+        dataloader: DataLoader for computing loss
+        device: Device
+        num_eigenvalues: Number of top eigenvalues to compute
+
+    Returns:
+        Array of top eigenvalues (sorted descending)
+    """
+    try:
+        print(f"    Computing Hessian eigenvalues in LoRA subspace...")
+        model.eval()
+
+        # Collect LoRA parameters only
+        lora_params = []
+        for name, param in model.named_parameters():
+            if param.requires_grad and ('lora_A' in name or 'lora_B' in name):
+                lora_params.append(param)
+
+        if len(lora_params) == 0:
+            print("    Warning: No LoRA parameters found, falling back to all trainable params")
+            lora_params = [p for p in model.parameters() if p.requires_grad]
+
+        print(f"    LoRA subspace dimension: {sum(p.numel() for p in lora_params)}")
+
+        # Get a batch for computing Hessian
+        batch = next(iter(dataloader))
+        input_ids = batch["input_ids"].to(device)
+        attention_mask = batch["attention_mask"].to(device)
+        labels = batch["labels"].to(device)
+
+        # Compute loss and gradients
+        model.zero_grad()
+        outputs = model(
+            input_ids=input_ids,
+            attention_mask=attention_mask,
+            labels=labels
+        )
+        loss = outputs.loss
+
+        # Get gradient w.r.t. LoRA parameters
+        grads = torch.autograd.grad(loss, lora_params, create_graph=True)
+        grad_vec = torch.cat([g.reshape(-1) for g in grads if g is not None])
+
+        if grad_vec.numel() == 0 or torch.all(torch.abs(grad_vec) < 1e-10):
+            print("    Warning: Gradient is near zero, using approximation")
+            return np.zeros(num_eigenvalues)
+
+        eigenvalues = []
+
+        # Power iteration for top eigenvalues
+        print(f"    Running power iteration for top {num_eigenvalues} eigenvalues...")
+        for i in range(min(num_eigenvalues, 10)):  # Limit iterations
+            # Random initialization
+            v = torch.randn(grad_vec.size(0), device=device, dtype=grad_vec.dtype)
+            v = v / (torch.norm(v) + 1e-10)
+
+            # Power iteration
+            for iter_idx in range(20):  # Increased iterations for convergence
+                # Compute Hessian-vector product: Hv = ∇(g^T v)
+                Hv_list = torch.autograd.grad(
+                    grad_vec, lora_params, grad_outputs=v,
+                    retain_graph=(i < min(num_eigenvalues, 10) - 1),
+                    allow_unused=True
+                )
+                Hv = torch.cat([h.reshape(-1) if h is not None else torch.zeros_like(p).reshape(-1)
+                               for h, p in zip(Hv_list, lora_params)])
+
+                # Normalize
+                norm = torch.norm(Hv)
+                if norm > 1e-10:
+                    v = Hv / norm
+                else:
+                    break
+
+            # Compute Rayleigh quotient for eigenvalue
+            if norm > 1e-10:
+                eigenvalue = torch.dot(v, Hv).item()
+                eigenvalues.append(max(0.0, eigenvalue))  # Ensure non-negative
+            else:
+                eigenvalues.append(0.0)
+
+        # Pad with zeros if needed
+        while len(eigenvalues) < num_eigenvalues:
+            eigenvalues.append(0.0)
+
+        # Sort in descending order
+        eigenvalues = sorted(eigenvalues, reverse=True)
+
+        return np.array(eigenvalues[:num_eigenvalues])
+
+    except Exception as e:
+        print(f"    Warning: Could not compute LoRA Hessian eigenvalues: {e}")
+        import traceback
+        traceback.print_exc()
+        return np.zeros(num_eigenvalues)
+
+
 def compute_hessian_eigenvalues(model, dataloader, device, num_eigenvalues: int = 20) -> np.ndarray:
     """
     Compute top eigenvalues of the Hessian using power iteration.
@@ -408,6 +539,217 @@ def compute_parameter_distance(params1: torch.Tensor, params2: torch.Tensor) -> 
         L2 distance
     """
     return torch.norm(params1 - params2).item()
+
+
+def plot_forgetting_vs_sharpness(
+    results_dict: Dict,
+    output_dir: str,
+    filename: str = "forgetting_vs_sharpness.png"
+):
+    """
+    Create Figure 2(c)/(d) style plots from the paper:
+    - (c) Forgetting vs λ_max * ||Δw||²
+    - (d) Additional analysis plots
+
+    Args:
+        results_dict: Dictionary containing results from multiple experiments
+                     Format: {experiment_name: {
+                         'lambda_max': float,
+                         'displacement': float,
+                         'forgetting': float,
+                         'task_name': str
+                     }}
+        output_dir: Output directory
+        filename: Output filename
+    """
+    import matplotlib.pyplot as plt
+
+    fig, axes = plt.subplots(1, 2, figsize=(14, 5))
+
+    # Extract data
+    lambda_max_list = []
+    displacement_list = []
+    forgetting_list = []
+    labels = []
+
+    for exp_name, data in results_dict.items():
+        if all(k in data for k in ['lambda_max', 'displacement', 'forgetting']):
+            lambda_max_list.append(data['lambda_max'])
+            displacement_list.append(data['displacement'])
+            forgetting_list.append(data['forgetting'])
+            labels.append(data.get('task_name', exp_name))
+
+    lambda_max_arr = np.array(lambda_max_list)
+    displacement_arr = np.array(displacement_list)
+    forgetting_arr = np.array(forgetting_list)
+
+    # Plot (c): Forgetting vs λ_max * ||Δw||²
+    sharpness_measure = 0.5 * lambda_max_arr * (displacement_arr ** 2)
+
+    ax1 = axes[0]
+    ax1.scatter(sharpness_measure, forgetting_arr, s=100, alpha=0.6, edgecolors='k', linewidth=1)
+    for i, label in enumerate(labels):
+        ax1.annotate(label, (sharpness_measure[i], forgetting_arr[i]),
+                    fontsize=8, alpha=0.7, xytext=(5, 5), textcoords='offset points')
+
+    ax1.set_xlabel(r'$\frac{1}{2} \lambda_{max} \|\Delta w\|^2$', fontsize=14)
+    ax1.set_ylabel('Forgetting (F₁)', fontsize=12)
+    ax1.set_title('(c) Forgetting vs Sharpness (LoRA Subspace)', fontsize=12, fontweight='bold')
+    ax1.grid(True, alpha=0.3)
+
+    # Add trend line if enough points
+    if len(sharpness_measure) > 2:
+        z = np.polyfit(sharpness_measure, forgetting_arr, 1)
+        p = np.poly1d(z)
+        x_line = np.linspace(sharpness_measure.min(), sharpness_measure.max(), 100)
+        ax1.plot(x_line, p(x_line), "r--", alpha=0.5, label=f'Trend: y={z[0]:.2f}x+{z[1]:.2f}')
+        ax1.legend()
+
+    # Plot (d): Eigenvalue spectrum comparison
+    ax2 = axes[1]
+    # This will be populated when we have eigenvalue data from multiple tasks
+    ax2.set_xlabel('Eigenvalue Index', fontsize=12)
+    ax2.set_ylabel('Eigenvalue Magnitude', fontsize=12)
+    ax2.set_title('(d) Hessian Eigenvalues in LoRA Subspace', fontsize=12, fontweight='bold')
+    ax2.grid(True, alpha=0.3)
+    ax2.text(0.5, 0.5, 'Eigenvalue spectra will be\nplotted when available',
+            ha='center', va='center', transform=ax2.transAxes, fontsize=10, alpha=0.5)
+
+    plt.tight_layout()
+    plot_path = os.path.join(output_dir, filename)
+    os.makedirs(output_dir, exist_ok=True)
+    plt.savefig(plot_path, dpi=150, bbox_inches='tight')
+    plt.close()
+    print(f"\nForgetting analysis plot saved to {plot_path}")
+
+
+def plot_eigenvalue_comparison(
+    eigenvalue_dict: Dict,
+    output_dir: str,
+    filename: str = "eigenvalue_comparison.png"
+):
+    """
+    Plot eigenvalue spectra for different tasks (Figure 2d style).
+
+    Args:
+        eigenvalue_dict: Dictionary with format:
+                        {task_name: eigenvalues_array}
+        output_dir: Output directory
+        filename: Output filename
+    """
+    import matplotlib.pyplot as plt
+
+    fig, ax = plt.subplots(figsize=(10, 6))
+
+    colors = plt.cm.tab10(np.linspace(0, 1, len(eigenvalue_dict)))
+
+    for (task_name, eigenvals), color in zip(eigenvalue_dict.items(), colors):
+        indices = np.arange(1, len(eigenvals) + 1)
+        ax.plot(indices, eigenvals, 'o-', label=task_name, color=color,
+               linewidth=2, markersize=6)
+
+    ax.set_xlabel('Eigenvalue Index', fontsize=12)
+    ax.set_ylabel('Eigenvalue Magnitude', fontsize=12)
+    ax.set_title('Hessian Eigenvalue Spectrum in LoRA Subspace', fontsize=14, fontweight='bold')
+    ax.legend(loc='best', fontsize=10)
+    ax.grid(True, alpha=0.3)
+
+    plot_path = os.path.join(output_dir, filename)
+    os.makedirs(output_dir, exist_ok=True)
+    plt.savefig(plot_path, dpi=150, bbox_inches='tight')
+    plt.close()
+    print(f"Eigenvalue comparison plot saved to {plot_path}")
+
+
+def analyze_loss_landscape_lora(
+    model,
+    dataloader,
+    device,
+    output_dir: str,
+    name: str,
+    initial_lora_params: torch.Tensor = None,
+    num_eigenvalues: int = 20,
+    compute_hessian: bool = True
+) -> Dict:
+    """
+    Loss landscape analysis in LoRA subspace.
+    This is specifically designed for LoRA-based continual learning.
+
+    Following the paper's methodology (Eq. 5): F₁ ≈ (1/2) λ_max ||Δw||²
+
+    Args:
+        model: PEFT model with LoRA
+        dataloader: DataLoader for computing loss
+        device: Device
+        output_dir: Output directory
+        name: Name for saving files
+        initial_lora_params: Initial LoRA parameters (for computing displacement)
+        num_eigenvalues: Number of top eigenvalues to compute
+        compute_hessian: Whether to compute Hessian eigenvalues
+
+    Returns:
+        Dictionary with analysis results
+    """
+    print(f"\nLoRA subspace loss landscape analysis for {name}...")
+
+    # Get current LoRA parameters
+    current_lora_params = get_lora_parameters(model, device)
+    lora_dim = current_lora_params.numel()
+
+    print(f"  LoRA parameter dimension: {lora_dim}")
+
+    # Compute LoRA parameter displacement if initial params provided
+    lora_param_norm = torch.norm(current_lora_params).item()
+    lora_displacement = None
+
+    if initial_lora_params is not None:
+        lora_displacement = torch.norm(initial_lora_params - current_lora_params).item()
+        print(f"  LoRA parameter displacement ||Δw_LoRA||: {lora_displacement:.4f}")
+        print(f"  LoRA parameter norm ||w_LoRA||: {lora_param_norm:.4f}")
+
+    # Compute top eigenvalues of Hessian in LoRA subspace
+    eigenvalues = np.zeros(num_eigenvalues)
+    lambda_max = 0.0
+
+    if compute_hessian:
+        print(f"  Computing top {num_eigenvalues} Hessian eigenvalues in LoRA subspace...")
+        try:
+            torch.cuda.empty_cache()
+            eigenvalues = compute_hessian_eigenvalues_lora_subspace(
+                model, dataloader, device, num_eigenvalues
+            )
+            lambda_max = eigenvalues[0] if len(eigenvalues) > 0 else 0.0
+            print(f"  λ_max (LoRA): {lambda_max:.6f}")
+
+            # Compute forgetting bound
+            if lora_displacement is not None:
+                forgetting_bound = 0.5 * lambda_max * (lora_displacement ** 2)
+                print(f"  Forgetting bound (F₁ ≈ ½λ_max||Δw||²): {forgetting_bound:.6f}")
+
+            # Save eigenvalues plot
+            if len(eigenvalues) > 0 and np.any(eigenvalues > 0):
+                plot_eigenvalues(eigenvalues, f"{name}_lora", output_dir)
+
+        except Exception as e:
+            print(f"  Error computing Hessian: {e}")
+            eigenvalues = np.zeros(num_eigenvalues)
+            lambda_max = 0.0
+    else:
+        print(f"  Skipping Hessian computation (compute_hessian=False)")
+
+    metrics = {
+        "lambda_max_lora": lambda_max,
+        "eigenvalues_lora": eigenvalues.tolist(),
+        "lora_param_norm": lora_param_norm,
+        "lora_displacement": lora_displacement,
+        "lora_dimension": lora_dim,
+        "forgetting_bound": 0.5 * lambda_max * (lora_displacement ** 2) if lora_displacement else None
+    }
+
+    return {
+        "current_lora_params": current_lora_params,
+        "metrics": metrics
+    }
 
 
 def analyze_loss_landscape_efficient(

@@ -1,5 +1,5 @@
 """Main experiment script for examining loss landscape flatness and catastrophic forgetting."""
-
+import numpy as np
 import torch
 import os
 import argparse
@@ -8,7 +8,15 @@ from datetime import datetime
 from config import ModelConfig, LoRAConfig, TrainingConfig, TRACEConfig, LossLandscapeConfig
 from data_loader import TRACEDataset
 from train import setup_model_and_tokenizer, train_on_task, save_checkpoint, load_checkpoint
-from loss_landscape import analyze_loss_landscape, analyze_loss_landscape_efficient, get_model_parameters
+from loss_landscape import (
+    analyze_loss_landscape,
+    analyze_loss_landscape_efficient,
+    analyze_loss_landscape_lora,
+    get_model_parameters,
+    get_lora_parameters,
+    plot_forgetting_vs_sharpness,
+    plot_eigenvalue_comparison
+)
 from evaluate import (
     evaluate_both_tasks,
     compute_forgetting_metrics,
@@ -110,6 +118,7 @@ def main(args):
 
     # Save initial parameters (for displacement tracking)
     initial_params = get_model_parameters(model, device)
+    initial_lora_params = get_lora_parameters(model, device)
 
     # Save checkpoint after Task 1
     checkpoint1_path = os.path.join(output_dir, "checkpoint_after_task1")
@@ -117,6 +126,7 @@ def main(args):
 
     # Get parameters after Task 1
     params_after_task1 = get_model_parameters(model, device)
+    lora_params_after_task1 = get_lora_parameters(model, device)
 
     # ========== PHASE 3: Evaluate after Task 1 ==========
     print("\n" + "="*70)
@@ -128,23 +138,25 @@ def main(args):
         trace_config.task1, trace_config.task2
     )
 
-    # ========== PHASE 4: Analyze Loss Landscape after Task 1 (EFFICIENT) ==========
+    # ========== PHASE 4: Analyze Loss Landscape after Task 1 (LoRA Subspace) ==========
     print("\n" + "="*70)
-    print("PHASE 4: Loss Landscape Analysis after Task 1 (Efficient)")
+    print("PHASE 4: Loss Landscape Analysis after Task 1 (LoRA Subspace)")
     print("="*70 + "\n")
 
-    landscape1_task1 = analyze_loss_landscape_efficient(
+    landscape1_task1 = analyze_loss_landscape_lora(
         model, task1_test_loader, device,
         output_dir, f"task1_{trace_config.task1}",
-        initial_params=initial_params,
-        num_eigenvalues=20
+        initial_lora_params=initial_lora_params,
+        num_eigenvalues=20,
+        compute_hessian=True
     )
 
-    landscape1_task2 = analyze_loss_landscape_efficient(
+    landscape1_task2 = analyze_loss_landscape_lora(
         model, task2_test_loader, device,
         output_dir, f"task1_on_{trace_config.task2}",
-        initial_params=initial_params,
-        num_eigenvalues=20
+        initial_lora_params=initial_lora_params,
+        num_eigenvalues=20,
+        compute_hessian=True
     )
 
     # ========== PHASE 5: Train on Task 2 ==========
@@ -169,6 +181,7 @@ def main(args):
 
     # Get parameters after Task 2
     params_after_task2 = get_model_parameters(model, device)
+    lora_params_after_task2 = get_lora_parameters(model, device)
 
     # ========== PHASE 6: Evaluate after Task 2 ==========
     print("\n" + "="*70)
@@ -180,23 +193,25 @@ def main(args):
         trace_config.task1, trace_config.task2
     )
 
-    # ========== PHASE 7: Analyze Loss Landscape after Task 2 (EFFICIENT) ==========
+    # ========== PHASE 7: Analyze Loss Landscape after Task 2 (LoRA Subspace) ==========
     print("\n" + "="*70)
-    print("PHASE 7: Loss Landscape Analysis after Task 2 (Efficient)")
+    print("PHASE 7: Loss Landscape Analysis after Task 2 (LoRA Subspace)")
     print("="*70 + "\n")
 
-    landscape2_task1 = analyze_loss_landscape_efficient(
+    landscape2_task1 = analyze_loss_landscape_lora(
         model, task1_test_loader, device,
         output_dir, f"task2_on_{trace_config.task1}",
-        initial_params=params_after_task1,
-        num_eigenvalues=20
+        initial_lora_params=lora_params_after_task1,
+        num_eigenvalues=20,
+        compute_hessian=True
     )
 
-    landscape2_task2 = analyze_loss_landscape_efficient(
+    landscape2_task2 = analyze_loss_landscape_lora(
         model, task2_test_loader, device,
         output_dir, f"task2_{trace_config.task2}",
-        initial_params=params_after_task1,
-        num_eigenvalues=20
+        initial_lora_params=lora_params_after_task1,
+        num_eigenvalues=20,
+        compute_hessian=True
     )
 
     # ========== PHASE 8: Compute Forgetting Metrics ==========
@@ -225,9 +240,43 @@ def main(args):
         "After Task 2 Training"
     )
 
-    # ========== PHASE 10: Save All Results ==========
+    # ========== PHASE 10: Generate Figure 2(c)/(d) style plots ==========
     print("\n" + "="*70)
-    print("PHASE 10: Saving Results")
+    print("PHASE 10: Generating Forgetting Analysis Plots")
+    print("="*70 + "\n")
+
+    # Prepare data for forgetting vs sharpness plot (Figure 2c style)
+    forgetting_data = {
+        f"Task1_{trace_config.task1}": {
+            'lambda_max': landscape1_task1["metrics"].get("lambda_max_lora", 0.0),
+            'displacement': landscape1_task1["metrics"].get("lora_displacement", 0.0),
+            'forgetting': 0.0,  # No forgetting on Task 1 after Task 1
+            'task_name': f"Task1 on {trace_config.task1}"
+        },
+        f"Task2_forgetting_{trace_config.task1}": {
+            'lambda_max': landscape2_task1["metrics"].get("lambda_max_lora", 0.0),
+            'displacement': landscape2_task1["metrics"].get("lora_displacement", 0.0),
+            'forgetting': forgetting_metrics.get("forgetting", 0.0),
+            'task_name': f"Task2 impact on {trace_config.task1}"
+        }
+    }
+
+    # Create forgetting vs sharpness plot
+    plot_forgetting_vs_sharpness(forgetting_data, output_dir, "forgetting_vs_sharpness_lora.png")
+
+    # Prepare eigenvalue comparison data (Figure 2d style)
+    eigenvalue_data = {
+        f"Task1 - {trace_config.task1}": np.array(landscape1_task1["metrics"].get("eigenvalues_lora", [])),
+        f"Task2 - {trace_config.task2}": np.array(landscape2_task2["metrics"].get("eigenvalues_lora", [])),
+        f"After Task2 on {trace_config.task1}": np.array(landscape2_task1["metrics"].get("eigenvalues_lora", []))
+    }
+
+    # Create eigenvalue comparison plot
+    plot_eigenvalue_comparison(eigenvalue_data, output_dir, "eigenvalue_comparison_lora.png")
+
+    # ========== PHASE 11: Save All Results ==========
+    print("\n" + "="*70)
+    print("PHASE 11: Saving Results")
     print("="*70 + "\n")
 
     final_results = {
@@ -257,7 +306,9 @@ def main(args):
     print(f"{'='*70}")
     print(f"\nAll results saved to: {output_dir}")
     print(f"  - Checkpoints: checkpoint_after_task1/, checkpoint_after_task2/")
-    print(f"  - Landscapes: landscape_*.png")
+    print(f"  - LoRA Hessian Eigenvalues: eigenvalues_*_lora.png")
+    print(f"  - Forgetting Analysis (Fig 2c): forgetting_vs_sharpness_lora.png")
+    print(f"  - Eigenvalue Comparison (Fig 2d): eigenvalue_comparison_lora.png")
     print(f"  - Metrics: results.json")
     print(f"\n{'='*70}\n")
 
