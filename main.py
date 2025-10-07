@@ -32,13 +32,22 @@ def main(args):
     # Setup configurations
     model_config = ModelConfig()
     lora_config = LoRAConfig()
+    lora_config.r = args.lora_r
+    lora_config.lora_alpha = args.lora_r * 2  # Typically 2*r
     training_config = TrainingConfig()
     training_config.batch_size = args.batch_size
     training_config.num_epochs = args.num_epochs
+    training_config.learning_rate = args.learning_rate
     trace_config = TRACEConfig()
     trace_config.task1 = args.task1
     trace_config.task2 = args.task2
     landscape_config = LossLandscapeConfig()
+
+    # Set random seed
+    np.random.seed(args.seed)
+    torch.manual_seed(args.seed)
+    if torch.cuda.is_available():
+        torch.cuda.manual_seed_all(args.seed)
 
     # Create output directory
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -246,18 +255,13 @@ def main(args):
     print("="*70 + "\n")
 
     # Prepare data for forgetting vs sharpness plot (Figure 2c style)
+    # Only include the forgetting point after Task 2 (not the baseline with 0 forgetting)
     forgetting_data = {
-        f"Task1_{trace_config.task1}": {
-            'lambda_max': landscape1_task1["metrics"].get("lambda_max_lora", 0.0),
-            'displacement': landscape1_task1["metrics"].get("lora_displacement", 0.0),
-            'forgetting': 0.0,  # No forgetting on Task 1 after Task 1
-            'task_name': f"Task1 on {trace_config.task1}"
-        },
         f"Task2_forgetting_{trace_config.task1}": {
             'lambda_max': landscape2_task1["metrics"].get("lambda_max_lora", 0.0),
             'displacement': landscape2_task1["metrics"].get("lora_displacement", 0.0),
-            'forgetting': forgetting_metrics.get("forgetting", 0.0),
-            'task_name': f"Task2 impact on {trace_config.task1}"
+            'forgetting': forgetting_metrics.get("absolute_forgetting", 0.0),
+            'task_name': f"After Task2 on {trace_config.task1}"
         }
     }
 
@@ -317,8 +321,11 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="TRACE Benchmark - Catastrophic Forgetting Experiment")
     parser.add_argument("--task1", type=str, default="scienceqa", help="First TRACE task")
     parser.add_argument("--task2", type=str, default="fomc", help="Second TRACE task")
-    parser.add_argument("--batch_size", type=int, default=1, help="Batch size")
-    parser.add_argument("--num_epochs", type=int, default=10, help="Number of epochs per task")
+    parser.add_argument("--batch-size", "--batch_size", type=int, default=1, help="Batch size")
+    parser.add_argument("--num-epochs", "--num_epochs", type=int, default=10, help="Number of epochs per task")
+    parser.add_argument("--seed", type=int, default=42, help="Random seed")
+    parser.add_argument("--lora-r", type=int, default=2, help="LoRA rank")
+    parser.add_argument("--learning-rate", "--lr", type=float, default=3e-4, help="Learning rate")
 
     args = parser.parse_args()
     main(args)

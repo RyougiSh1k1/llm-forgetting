@@ -4,7 +4,8 @@
       "Bash(python:*)",
       "Bash(conda install:*)",
       "Bash(python3:*)",
-      "Bash(cat:*)"
+      "Bash(cat:*)",
+      "Bash(conda run:*)"
     ],
     "deny": [],
     "ask": []

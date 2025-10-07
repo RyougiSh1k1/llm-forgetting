@@ -270,14 +270,17 @@ def get_lora_parameters(model, device) -> torch.Tensor:
 
 def compute_hessian_eigenvalues_lora_subspace(model, dataloader, device, num_eigenvalues: int = 20) -> np.ndarray:
     """
-    Compute top eigenvalues of the Hessian in LoRA subspace.
+    Compute top eigenvalues using Fisher Information Matrix approximation in LoRA subspace.
 
     Following "Understanding the Role of Training Regimes in Continual Learning" (Mirzadeh et al. 2020),
-    this computes the Hessian with respect to LoRA parameters only, which is much more efficient
-    and relevant for LoRA-based continual learning.
+    this computes eigenvalues with respect to LoRA parameters only, using Fisher Information Matrix
+    (FIM) as a memory-efficient approximation of the Hessian.
+
+    Fisher Information: F = E[g g^T] where g is the gradient vector
+    This is much more memory-efficient than true Hessian and provides a good approximation.
 
     The forgetting bound is: F1 ≈ (1/2) λ_max ||Δw||²
-    where λ_max is the maximum Hessian eigenvalue in LoRA subspace.
+    where λ_max is the maximum eigenvalue of Fisher matrix in LoRA subspace.
 
     Args:
         model: PEFT model with LoRA
@@ -289,7 +292,7 @@ def compute_hessian_eigenvalues_lora_subspace(model, dataloader, device, num_eig
         Array of top eigenvalues (sorted descending)
     """
     try:
-        print(f"    Computing Hessian eigenvalues in LoRA subspace...")
+        print(f"    Computing Fisher eigenvalues in LoRA subspace (ultra memory-efficient)...")
         model.eval()
 
         # Collect LoRA parameters only
@@ -302,76 +305,106 @@ def compute_hessian_eigenvalues_lora_subspace(model, dataloader, device, num_eig
             print("    Warning: No LoRA parameters found, falling back to all trainable params")
             lora_params = [p for p in model.parameters() if p.requires_grad]
 
-        print(f"    LoRA subspace dimension: {sum(p.numel() for p in lora_params)}")
+        lora_dim = sum(p.numel() for p in lora_params)
+        print(f"    LoRA subspace dimension: {lora_dim}")
 
-        # Get a batch for computing Hessian
-        batch = next(iter(dataloader))
-        input_ids = batch["input_ids"].to(device)
-        attention_mask = batch["attention_mask"].to(device)
-        labels = batch["labels"].to(device)
+        # ULTRA MEMORY-EFFICIENT: Compute only the maximum eigenvalue (λ_max)
+        # This is the only one needed for the forgetting bound
+        print(f"    Computing only λ_max (maximum eigenvalue) to minimize memory...")
 
-        # Compute loss and gradients
-        model.zero_grad()
-        outputs = model(
-            input_ids=input_ids,
-            attention_mask=attention_mask,
-            labels=labels
-        )
-        loss = outputs.loss
+        # Use only 3 samples for gradient estimation
+        num_samples = min(3, len(dataloader))
 
-        # Get gradient w.r.t. LoRA parameters
-        grads = torch.autograd.grad(loss, lora_params, create_graph=True)
-        grad_vec = torch.cat([g.reshape(-1) for g in grads if g is not None])
+        # Initialize random vector for power iteration (on CPU)
+        v = torch.randn(lora_dim, dtype=torch.float32)
+        v = v / (torch.norm(v) + 1e-10)
 
-        if grad_vec.numel() == 0 or torch.all(torch.abs(grad_vec) < 1e-10):
-            print("    Warning: Gradient is near zero, using approximation")
-            return np.zeros(num_eigenvalues)
+        print(f"    Running streaming power iteration with {num_samples} samples...")
 
-        eigenvalues = []
+        # Power iteration with streaming (no gradient storage)
+        for power_iter in range(10):  # Reduce to 10 iterations
+            Fv = torch.zeros(lora_dim, dtype=torch.float32)
 
-        # Power iteration for top eigenvalues
-        print(f"    Running power iteration for top {num_eigenvalues} eigenvalues...")
-        for i in range(min(num_eigenvalues, 10)):  # Limit iterations
-            # Random initialization
-            v = torch.randn(grad_vec.size(0), device=device, dtype=grad_vec.dtype)
-            v = v / (torch.norm(v) + 1e-10)
-
-            # Power iteration
-            for iter_idx in range(20):  # Increased iterations for convergence
-                # Compute Hessian-vector product: Hv = ∇(g^T v)
-                Hv_list = torch.autograd.grad(
-                    grad_vec, lora_params, grad_outputs=v,
-                    retain_graph=(i < min(num_eigenvalues, 10) - 1),
-                    allow_unused=True
-                )
-                Hv = torch.cat([h.reshape(-1) if h is not None else torch.zeros_like(p).reshape(-1)
-                               for h, p in zip(Hv_list, lora_params)])
-
-                # Normalize
-                norm = torch.norm(Hv)
-                if norm > 1e-10:
-                    v = Hv / norm
-                else:
+            # Compute Fisher-vector product incrementally (streaming)
+            for idx, batch in enumerate(dataloader):
+                if idx >= num_samples:
                     break
 
-            # Compute Rayleigh quotient for eigenvalue
-            if norm > 1e-10:
-                eigenvalue = torch.dot(v, Hv).item()
-                eigenvalues.append(max(0.0, eigenvalue))  # Ensure non-negative
-            else:
-                eigenvalues.append(0.0)
+                # Process only first sample in batch
+                input_ids = batch["input_ids"][:1].to(device)
+                attention_mask = batch["attention_mask"][:1].to(device)
+                labels = batch["labels"][:1].to(device)
 
-        # Pad with zeros if needed
-        while len(eigenvalues) < num_eigenvalues:
-            eigenvalues.append(0.0)
+                # Compute loss and gradients
+                model.zero_grad()
+                outputs = model(
+                    input_ids=input_ids,
+                    attention_mask=attention_mask,
+                    labels=labels
+                )
+                loss = outputs.loss
 
-        # Sort in descending order
-        eigenvalues = sorted(eigenvalues, reverse=True)
+                # Get gradient w.r.t. LoRA parameters
+                grads = torch.autograd.grad(loss, lora_params, retain_graph=False)
+                grad_vec = torch.cat([g.reshape(-1) for g in grads if g is not None]).cpu()
 
-        return np.array(eigenvalues[:num_eigenvalues])
+                # Accumulate Fisher-vector product: Fv += g * (g^T v)
+                if grad_vec.numel() > 0 and not torch.all(torch.abs(grad_vec) < 1e-10):
+                    Fv += grad_vec * torch.dot(grad_vec, v)
+
+                # Immediate cleanup
+                del loss, outputs, grads, grad_vec, input_ids, attention_mask, labels
+                torch.cuda.empty_cache()
+
+            # Average and normalize
+            Fv /= num_samples
+            norm = torch.norm(Fv)
+
+            if norm < 1e-10:
+                print("    Warning: Fisher matrix appears to be near-zero")
+                return np.zeros(num_eigenvalues)
+
+            v_new = Fv / norm
+
+            # Check convergence
+            if torch.dot(v, v_new).abs() > 0.999:
+                v = v_new
+                break
+            v = v_new
+
+        # Compute λ_max: λ = v^T F v (one more pass through data)
+        lambda_max = 0.0
+        for idx, batch in enumerate(dataloader):
+            if idx >= num_samples:
+                break
+
+            input_ids = batch["input_ids"][:1].to(device)
+            attention_mask = batch["attention_mask"][:1].to(device)
+            labels = batch["labels"][:1].to(device)
+
+            model.zero_grad()
+            outputs = model(input_ids=input_ids, attention_mask=attention_mask, labels=labels)
+            loss = outputs.loss
+
+            grads = torch.autograd.grad(loss, lora_params, retain_graph=False)
+            grad_vec = torch.cat([g.reshape(-1) for g in grads if g is not None]).cpu()
+
+            if grad_vec.numel() > 0:
+                lambda_max += torch.dot(grad_vec, v) ** 2
+
+            del loss, outputs, grads, grad_vec, input_ids, attention_mask, labels
+            torch.cuda.empty_cache()
+
+        lambda_max = max(0.0, (lambda_max / num_samples).item())
+
+        print(f"    Maximum eigenvalue (λ_max): {lambda_max:.6f}")
+
+        # Return only λ_max (rest are zeros)
+        eigenvalues = [lambda_max] + [0.0] * (num_eigenvalues - 1)
+        return np.array(eigenvalues)
 
     except Exception as e:
-        print(f"    Warning: Could not compute LoRA Hessian eigenvalues: {e}")
+        print(f"    Warning: Could not compute Fisher eigenvalues: {e}")
         import traceback
         traceback.print_exc()
         return np.zeros(num_eigenvalues)
